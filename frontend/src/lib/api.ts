@@ -78,6 +78,63 @@ export async function getOpenPositions(): Promise<OpenPositionItem[]> {
   return (await res.json()) as OpenPositionItem[];
 }
 
+export async function patchPosition(
+  positionId: string,
+  payload: {
+    origin?: "manual" | "alert_based";
+    notes?: string | null;
+    open_time_utc?: string | null;
+  }
+): Promise<OpenPositionItem> {
+  const res = await fetch(makeUrl(`/api/positions/${positionId}`), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to update position (${res.status})`);
+  }
+  return (await res.json()) as OpenPositionItem;
+}
+
+export async function addPositionTag(payload: {
+  positionId: string;
+  tag: string;
+  source?: "manual" | "auto";
+}): Promise<PositionTagItem> {
+  const res = await fetch(makeUrl(`/api/positions/${payload.positionId}/tags`), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      tag: payload.tag,
+      source: payload.source ?? "manual"
+    })
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to add tag (${res.status})`);
+  }
+  return (await res.json()) as PositionTagItem;
+}
+
+export async function deletePositionTag(payload: {
+  positionId: string;
+  tagId: string;
+}): Promise<void> {
+  const res = await fetch(
+    makeUrl(`/api/positions/${payload.positionId}/tags/${payload.tagId}`),
+    {
+      method: "DELETE"
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to delete tag (${res.status})`);
+  }
+}
+
 export async function linkTriggerToPosition(payload: {
   triggerId: string;
   positionId: string;
