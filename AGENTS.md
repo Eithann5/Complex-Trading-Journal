@@ -1,5 +1,3 @@
-# AGENTS.md — Complex Trading Journal (Codex Rules)
-
 ## Golden rules (do not violate)
 - Repo is a monorepo with two separate apps:
   - /backend = Python FastAPI
