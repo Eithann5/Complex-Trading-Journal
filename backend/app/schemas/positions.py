@@ -50,7 +50,22 @@ class OpenPositionItem(BaseModel):
     open_time_utc: datetime | None
     close_time_utc: datetime | None
     created_at_utc: datetime
+    last: float | None = None
+    position: float | None = None
+    mkt_value: float | None = None
+    chg_pct: float | None = None
+    pnl: float | None = None
+    unrealized_pnl: float | None = None
+    unrealized_pnl_pct: float | None = None
+    currency: str | None = None
     tags: list[PositionTagItem]
     linked_triggers: list[LinkedTriggerItem]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SnapshotRunResponse(BaseModel):
+    ok: bool
+    snapshots_created: int
+    tickers: list[str]
+    snapshot_time_utc: datetime

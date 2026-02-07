@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,11 +22,20 @@ class Settings(BaseSettings):
     max_new_charts_per_feed_request: int = Field(
         default=3, validation_alias="CTJ_MAX_NEW_CHARTS_PER_FEED_REQUEST"
     )
+    ibkr_base_url: str | None = Field(default=None, validation_alias="IBKR_BASE_URL")
+    ibkr_account_id: str | None = Field(
+        default=None, validation_alias=AliasChoices("IBKR_ACCOUNT_ID", "IBKR_ACCOUNT")
+    )
+    ibkr_verify_ssl: bool = Field(default=False, validation_alias="IBKR_VERIFY_SSL")
+    ibkr_snapshot_interval_seconds: int = Field(
+        default=300, validation_alias="IBKR_SNAPSHOT_INTERVAL_SECONDS"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="CTJ_",
         env_file=".env",
         case_sensitive=False,
+        extra="ignore",
     )
 
 

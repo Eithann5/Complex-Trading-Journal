@@ -148,6 +148,9 @@ class SupabaseService:
         if not positions_rows:
             return []
 
+        tickers = sorted({str(row["ticker"]).upper() for row in positions_rows})
+        latest_snapshot_by_ticker = self._get_latest_snapshot_by_ticker(tickers)
+
         position_ids = [row["id"] for row in positions_rows]
         tags_rows = (
             client.table("position_tags")
@@ -199,10 +202,46 @@ class SupabaseService:
 
         items: list[OpenPositionItem] = []
         for row in positions_rows:
+            ticker = str(row["ticker"]).upper()
+            snapshot = latest_snapshot_by_ticker.get(ticker)
+            quantity = float(snapshot["quantity"]) if snapshot and snapshot.get("quantity") is not None else None
+            market_price = (
+                float(snapshot["market_price"])
+                if snapshot and snapshot.get("market_price") is not None
+                else None
+            )
+            avg_cost = (
+                float(snapshot["avg_cost"])
+                if snapshot and snapshot.get("avg_cost") is not None
+                else None
+            )
+            unrealized_pnl = (
+                float(snapshot["unrealized_pnl"])
+                if snapshot and snapshot.get("unrealized_pnl") is not None
+                else None
+            )
+            mkt_value = quantity * market_price if quantity is not None and market_price is not None else None
+            cost_basis = quantity * avg_cost if quantity is not None and avg_cost is not None else None
+            unrealized_pnl_pct = (
+                (unrealized_pnl / abs(cost_basis) * 100)
+                if unrealized_pnl is not None and cost_basis not in (None, 0)
+                else None
+            )
+            raw = snapshot.get("raw") if snapshot else {}
+            chg_pct = (
+                float(raw.get("chgPercent"))
+                if isinstance(raw, dict) and raw.get("chgPercent") is not None
+                else None
+            )
+            pnl = (
+                float(raw.get("dailyPnl"))
+                if isinstance(raw, dict) and raw.get("dailyPnl") is not None
+                else None
+            )
             items.append(
                 OpenPositionItem(
                     id=row["id"],
-                    ticker=row["ticker"],
+                    ticker=ticker,
                     status=row["status"],
                     origin=row["origin"],
                     notes=row.get("notes"),
@@ -219,6 +258,14 @@ class SupabaseService:
                     created_at_utc=datetime.fromisoformat(
                         row["created_at"].replace("Z", "+00:00")
                     ),
+                    last=market_price,
+                    position=quantity,
+                    mkt_value=mkt_value,
+                    chg_pct=chg_pct,
+                    pnl=pnl,
+                    unrealized_pnl=unrealized_pnl,
+                    unrealized_pnl_pct=unrealized_pnl_pct,
+                    currency=snapshot.get("currency") if snapshot else None,
                     tags=tags_by_position.get(row["id"], []),
                     linked_triggers=links_by_position.get(row["id"], []),
                 )
@@ -266,9 +313,42 @@ class SupabaseService:
             created_at_utc=datetime.fromisoformat(
                 row["created_at"].replace("Z", "+00:00")
             ),
+            last=None,
+            position=None,
+            mkt_value=None,
+            chg_pct=None,
+            pnl=None,
+            unrealized_pnl=None,
+            unrealized_pnl_pct=None,
+            currency=None,
             tags=self._get_position_tags(position_id),
             linked_triggers=self._get_position_links(position_id),
         )
+
+    def _get_latest_snapshot_by_ticker(self, tickers: list[str]) -> dict[str, dict[str, Any]]:
+        if not tickers:
+            return {}
+        try:
+            rows = (
+                self._get_client()
+                .table("positions_snapshot")
+                .select(
+                    "ticker,quantity,avg_cost,market_price,unrealized_pnl,currency,raw,snapshot_time_utc"
+                )
+                .in_("ticker", tickers)
+                .order("snapshot_time_utc", desc=True)
+                .execute()
+                .data
+                or []
+            )
+        except APIError:
+            return {}
+        latest: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            ticker = str(row["ticker"]).upper()
+            if ticker not in latest:
+                latest[ticker] = row
+        return latest
 
     def _get_position_tags(self, position_id: str) -> list[PositionTagItem]:
         rows = (
@@ -362,6 +442,35 @@ class SupabaseService:
         client.table("position_tags").delete().eq("position_id", position_id).eq(
             "id", tag_id
         ).execute()
+
+    def insert_position_snapshots(self, snapshot_rows: list[dict[str, Any]]) -> None:
+        if not snapshot_rows:
+            return
+        self._get_client().table("positions_snapshot").insert(snapshot_rows).execute()
+
+    def ensure_open_positions_for_tickers(self, tickers: list[str]) -> None:
+        if not tickers:
+            return
+        client = self._get_client()
+        existing_rows = (
+            client.table("position_journal")
+            .select("ticker")
+            .eq("status", "open")
+            .in_("ticker", tickers)
+            .execute()
+            .data
+            or []
+        )
+        existing_tickers = {str(row["ticker"]).upper() for row in existing_rows}
+        missing = [ticker for ticker in tickers if ticker.upper() not in existing_tickers]
+        if not missing:
+            return
+
+        inserts = [
+            {"ticker": ticker.upper(), "status": "open", "origin": "manual"}
+            for ticker in missing
+        ]
+        client.table("position_journal").insert(inserts).execute()
 
 
 supabase_service = SupabaseService()
