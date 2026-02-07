@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +10,11 @@ import mplfinance as mpf
 import pandas as pd
 
 from app.services.charting.profiles import ChartProfile
+from app.config import settings
 
 VENDOR_SAMI_ROOT = Path(__file__).resolve().parent / "vendor" / "sami"
+_OHLC_CACHE: dict[tuple[str, str, str], tuple[float, pd.DataFrame]] = {}
+_LAST_FETCH_MONOTONIC: float | None = None
 
 
 def _add_vendor_path() -> None:
@@ -40,9 +44,12 @@ def _build_addplots(df: pd.DataFrame, indicators: tuple[str, ...]) -> list[Any]:
             continue
         column = f"SMA_{window}"
         if column in df.columns:
+            series = df[column]
+            if series.dropna().empty:
+                continue
             addplots.append(
                 mpf.make_addplot(
-                    df[column],
+                    series,
                     color=color_by_window.get(window, "#444444"),
                     width=1.2,
                     label=f"SMA {window}",
@@ -61,65 +68,68 @@ def _prepare_ohlc_frame(df: pd.DataFrame) -> pd.DataFrame:
     return framed.set_index("Date")
 
 
-def _render_fallback_chart(symbol: str, profile: ChartProfile, output_path: Path) -> None:
-    fig, ax = plt.subplots(figsize=profile.render.figsize)
-    ax.set_axis_off()
-    ax.text(
-        0.5,
-        0.55,
-        symbol,
-        ha="center",
-        va="center",
-        fontsize=18,
-        fontweight="bold",
-    )
-    ax.text(
-        0.5,
-        0.42,
-        "Chart data unavailable",
-        ha="center",
-        va="center",
-        fontsize=11,
-        color="#666666",
-    )
-    if profile.render.tight_layout:
-        fig.tight_layout(pad=0.2)
-    fig.savefig(output_path, dpi=profile.render.dpi, bbox_inches="tight", pad_inches=0.03)
-    plt.close(fig)
+def _get_cached_ohlc(
+    *,
+    symbol: str,
+    period: str,
+    interval: str,
+    fetch_fn: Any,
+) -> pd.DataFrame:
+    global _LAST_FETCH_MONOTONIC
+    cache_key = (symbol, period, interval)
+    now = time.monotonic()
+    cached_entry = _OHLC_CACHE.get(cache_key)
+    if cached_entry is not None:
+        cached_at, cached_df = cached_entry
+        if now - cached_at <= settings.chart_ohlc_cache_ttl_seconds:
+            return cached_df.copy(deep=True)
+
+    if _LAST_FETCH_MONOTONIC is not None:
+        elapsed = now - _LAST_FETCH_MONOTONIC
+        sleep_seconds = settings.chart_fetch_min_interval_seconds - elapsed
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
+    fetched_df = fetch_fn(symbol, period, interval)
+    _LAST_FETCH_MONOTONIC = time.monotonic()
+    _OHLC_CACHE[cache_key] = (_LAST_FETCH_MONOTONIC, fetched_df)
+    return fetched_df.copy(deep=True)
 
 
 def render_trigger_chart(trigger: Any, profile: ChartProfile, output_path: Path) -> None:
     get_ticker_historical_data, Stock, add_sma = _load_vendor_components()
     symbol = str(trigger.symbol).upper().strip()
-    try:
-        raw_df = get_ticker_historical_data(
-            symbol, profile.data_period, profile.data_interval
-        )
-        stock = Stock(raw_df)
-        stock.ticker = symbol
+    raw_df = _get_cached_ohlc(
+        symbol=symbol,
+        period=profile.data_period,
+        interval=profile.data_interval,
+        fetch_fn=get_ticker_historical_data,
+    )
+    stock = Stock(raw_df)
+    stock.ticker = symbol
 
-        for indicator in profile.indicators:
-            if indicator.startswith("sma_"):
-                window = int(indicator.split("_", maxsplit=1)[1])
-                add_sma(stock, window)
+    for indicator in profile.indicators:
+        if indicator.startswith("sma_"):
+            window = int(indicator.split("_", maxsplit=1)[1])
+            add_sma(stock, window)
 
-        df = _prepare_ohlc_frame(stock.stock_data)
-        addplots = _build_addplots(df, profile.indicators)
+    df = _prepare_ohlc_frame(stock.stock_data)
+    if profile.lookback_days > 0 and len(df) > profile.lookback_days:
+        df = df.tail(profile.lookback_days).copy()
+    addplots = _build_addplots(df, profile.indicators)
 
-        fig, _axes = mpf.plot(
-            df,
-            type="candle",
-            style="yahoo",
-            addplot=addplots if addplots else None,
-            volume=profile.render.show_volume,
-            returnfig=True,
-            figsize=profile.render.figsize,
-        )
+    fig, _axes = mpf.plot(
+        df,
+        type="candle",
+        style="yahoo",
+        addplot=addplots if addplots else None,
+        volume=profile.render.show_volume,
+        returnfig=True,
+        figsize=profile.render.figsize,
+    )
 
-        if profile.render.tight_layout:
-            fig.tight_layout(pad=0.2)
+    if profile.render.tight_layout:
+        fig.tight_layout(pad=0.2)
 
-        fig.savefig(output_path, dpi=profile.render.dpi, bbox_inches="tight", pad_inches=0.03)
-        plt.close(fig)
-    except Exception:  # noqa: BLE001
-        _render_fallback_chart(symbol, profile, output_path)
+    fig.savefig(output_path, dpi=profile.render.dpi, bbox_inches="tight", pad_inches=0.03)
+    plt.close(fig)

@@ -27,7 +27,7 @@ CHART_PROFILES: dict[str, ChartProfile] = {
     "alert_basic": ChartProfile(
         name="alert_basic",
         lookback_days=60,
-        data_period="6mo",
+        data_period="2y",
         data_interval="1d",
         indicators=("sma_20", "sma_150", "sma_200"),
         output_subdirectory="charts/triggers",
