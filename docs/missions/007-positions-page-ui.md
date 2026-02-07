@@ -2,7 +2,7 @@
 
 ## Goal
 Implement `/positions` page UI:
-- Table of open positions
+- Table of open positions with the following columns by order: ticker, last, position, mkt value, chg %, P&L, Unrlzd P&L, Unrlzd P&L %
 - Drawer to edit origin, tags, and notes
 - Display linked triggers list
 
